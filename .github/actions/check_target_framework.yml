@@ -1,0 +1,90 @@
+ - name: Check target frameworks
+       shell: pwsh
+       run: |
+        $LTSNetVersions = '{"SupportedVersions":
+                            [
+                            {"version":"net5.0","endDate":"2022-05-10"}, 
+                            {"version":"netcoreapp3.1","endDate":"2022-12-03"}, 
+                            {"version":"netcoreapp2.2","endDate":"2019-12-23"},
+                            {"version":"netstandard2.1","endDate":"indefinido"}, 
+                            {"version":"netstandard2.0","endDate":"indefinido"}, 
+                            {"version":"net48","endDate":"indefinido"},
+                            {"version":"v4.8","endDate":"indefinido"},
+                            {"version":"net472","endDate":"indefinido"},
+                            {"version":"v4.7.2","endDate":"indefinido"},
+                            {"version":"net471","endDate":"indefinido"},
+                            {"version":"v4.7.1","endDate":"indefinido"},
+                            {"version":"net47","endDate":"indefinido"},
+                            {"version":"v4.7","endDate":"indefinido"},
+                            {"version":"net462","endDate":"indefinido"},
+                            {"version":"v4.6.2","endDate":"indefinido"},
+                            {"version":"net461","endDate":"2022-04-26"},
+                            {"version":"v4.6.1","endDate":"2022-04-26"},
+                            {"version":"net46","endDate":"2022-04-26"},
+                            {"version":"v4.6","endDate":"2022-04-26"},
+                            {"version":"net452","endDate":"2022-04-26"},
+                            {"version":"v4.5.2","endDate":"2022-04-26"},
+                            {"version":"net6.0","endDate":"2024-11-12"},
+                            {"version":"net6.0-windows","endDate":"2024-11-12"},
+                            {"version":"net8.0","endDate":"2026-11-12"} 
+                            ]}'
+    
+        $result = @()
+        $targets = @()
+        Get-ChildItem ${{ github.workspace }} -Include *.vbproj, *.csproj -Recurse -Force | ForEach-Object {
+            $projectName = $_.BaseName
+            $projectExt = $_.Extension
+            $supportedVersions = (ConvertFrom-Json –InputObject $LTSNetVersions).SupportedVersions
+        
+            [xml]$projectXml = (Get-Content ($_))
+            $namespace = New-Object System.Xml.XmlNamespaceManager($projectXml.NameTable)
+            $namespace.AddNamespace("nsp", $projectXml.DocumentElement.NamespaceURI)
+        
+            $targetFramework = $projectXml.SelectSingleNode("//nsp:TargetFrameworkVersion", $namespace)
+            if ($targetFramework -ne $null) { $targets += [string]$targetFramework.InnerXml.Trim() }
+            $targetFramework = $projectXml.SelectSingleNode("//nsp:TargetFramework", $namespace)
+            if ($targetFramework -ne $null) { $targets += [string]$targetFramework.InnerXml.Trim() }
+        
+            $targetFrameworks = $projectXml.SelectSingleNode("//nsp:TargetFrameworks", $namespace)
+            if ($targetFrameworks -ne $null) { $targetFrameworks.InnerXml.split(";", [System.StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { $targets += [string]$_.Trim() } }
+        
+            $targets | Select-Object -Unique | ForEach-Object {
+                $target = $_
+                $revision = New-Object PSObject
+                $revision | Add-Member -MemberType NoteProperty -Name Proyecto -Value (-join($projectName, $projectExt))
+                $revision | Add-Member -MemberType NoteProperty -Name TargetFramework -Value $target
+        
+                $ltsVersion = $supportedVersions | Where-Object { $_.version -eq $target }
+                if ($ltsVersion -eq $null) {
+                    $revision | Add-Member -MemberType NoteProperty -Name LTS -Value "No"
+                    $revision | Add-Member -MemberType NoteProperty -Name 'Acción solicitada' -Value "Actualice el target framework de este proyecto a una versión LTS."
+                } else {
+                    if ($ltsVersion.endDate -eq "indefinido") {
+                        $revision | Add-Member -MemberType NoteProperty -Name LTS -Value "Sí"
+                        $revision | Add-Member -MemberType NoteProperty -Name 'Acción solicitada' -Value "Ninguna"
+                    } else {
+                        $daysBeforeEndOfSupport = ([DateTime]$ltsVersion.endDate - (Get-Date)).TotalDays
+                        if ($daysBeforeEndOfSupport -lt 0) {
+                            $revision | Add-Member -MemberType NoteProperty -Name LTS -Value "No"
+                            $revision | Add-Member -MemberType NoteProperty -Name 'Acción solicitada' -Value (-join("Soporte para [", $ltsVersion.version, "] finalizó el [", $ltsVersion.endDate, "]"))
+                        } else {
+                            $revision | Add-Member -MemberType NoteProperty -Name LTS -Value "Sí"
+                            $revision | Add-Member -MemberType NoteProperty -Name 'Acción solicitada' -Value (-join("Tiene ", [math]::Round($daysBeforeEndOfSupport,1), " días para actualizar el target framework."))
+                        }
+                    }
+                }
+        
+                $result += $revision
+                $targets.Clear()
+            }
+        }
+        
+        $result | Format-Table –AutoSize
+        $noLTS = $result | Where-Object { $_.LTS -eq "No" }
+        
+        if ($noLTS -eq $null) {
+            Write-Host 'Todos los proyectos tienen target frameworks LTS'
+        } else {
+            Write-Host "::warning::Tiene proyectos compilados con versiones .NET sin soporte"
+            exit 1
+        }
