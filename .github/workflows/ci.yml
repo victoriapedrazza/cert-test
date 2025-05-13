@@ -16,3 +16,12 @@ jobs:
 
       - name: Print hello
         run: echo "✅ Workflow funcionando correctamente"
+  
+
+   #   - name: Check Target Frameworks
+   
+   #     uses: (org)/(repo).github/actions/task_check_target_frameworks.yml@feature
+   #     with: 
+   #      runner_label: BC-WICCN-172
+   #      secrets: inherit
+
